@@ -16,6 +16,7 @@ public struct PPOProjectCardModel: Identifiable, Equatable, Hashable {
   public let tierType: TierType
   public let backingDetailsUrl: String
   public let backingId: Int
+  public let backingGraphId: String
   public let projectAnalytics: GraphAPI.ProjectAnalyticsFragment
 
   public func hash(into hasher: inout Hasher) {
@@ -60,7 +61,7 @@ public struct PPOProjectCardModel: Identifiable, Equatable, Hashable {
   }
 
   public enum Action: Identifiable, Equatable, Hashable {
-    case confirmAddress
+    case confirmAddress(address: String, addressId: String)
     case editAddress
     case completeSurvey
     case fixPayment
@@ -232,10 +233,18 @@ extension PPOProjectCardModel {
       Los Angeles, CA 90025-1234
       United States
     """,
-    actions: (.confirmAddress, .editAddress),
+    actions: (.confirmAddress(
+      address: """
+        123 First Street, Apt #5678
+        Los Angeles, CA 90025-1234
+        United States
+      """,
+      addressId: "fake-address-id"
+    ), .editAddress),
     tierType: .confirmAddress,
     backingDetailsUrl: "fakeBackingDetailsUrl",
     backingId: 47,
+    backingGraphId: "backing-fake-id",
     projectAnalytics: Self.projectAnalyticsFragmentTemplate
   )
 
@@ -255,6 +264,7 @@ extension PPOProjectCardModel {
     tierType: .openSurvey,
     backingDetailsUrl: "fakeBackingDetailsUrl",
     backingId: 47,
+    backingGraphId: "backing-fake-id",
     projectAnalytics: Self.projectAnalyticsFragmentTemplate
   )
 
@@ -278,6 +288,7 @@ extension PPOProjectCardModel {
     tierType: .fixPayment,
     backingDetailsUrl: "fakeBackingDetailsUrl",
     backingId: 47,
+    backingGraphId: "backing-fake-id",
     projectAnalytics: Self.projectAnalyticsFragmentTemplate
   )
 
@@ -301,6 +312,7 @@ extension PPOProjectCardModel {
     tierType: .authenticateCard,
     backingDetailsUrl: "fakeBackingDetailsUrl",
     backingId: 47,
+    backingGraphId: "backing-fake-id",
     projectAnalytics: Self.projectAnalyticsFragmentTemplate
   )
 
@@ -319,6 +331,7 @@ extension PPOProjectCardModel {
     tierType: .openSurvey,
     backingDetailsUrl: "fakeBackingDetailsUrl",
     backingId: 47,
+    backingGraphId: "backing-fake-id",
     projectAnalytics: Self.projectAnalyticsFragmentTemplate
   )
 
@@ -375,21 +388,28 @@ extension PPOProjectCardModel {
     let formattedPledge = pledgeFragment.flatMap { Format.currency($0) }
     let creatorName = ppoProject?.creator?.name
 
-    let address: String? = backing?.deliveryAddress.flatMap { deliveryAddress in
+    let addressId: String? = backing?.deliveryAddress?.id
+    let addressWithoutName: String? = backing?.deliveryAddress.flatMap { deliveryAddress in
       let cityRegionFields: [String?] = [
         deliveryAddress.city,
         deliveryAddress.region.flatMap { ", \($0)" },
         deliveryAddress.postalCode.flatMap { " \($0)" }
       ]
       let fields: [String?] = [
-        deliveryAddress.recipientName,
         deliveryAddress.addressLine1,
         deliveryAddress.addressLine2,
         cityRegionFields.compactMap { $0 }.joined(),
         deliveryAddress.countryCode.rawValue,
         deliveryAddress.phoneNumber
       ]
-      return fields.compactMap { $0 }.joined(separator: "\n")
+      // Create address from all fields that are not nil and not the empty string.
+      return fields.compactMap { ($0 ?? "").isEmpty ? nil : $0 }.joined(separator: "\n")
+    }
+    let addressWithName = addressWithoutName.flatMap { address in
+      guard let name = backing?.deliveryAddress?.recipientName else {
+        return address
+      }
+      return name + "\n" + address
     }
 
     let alerts: [PPOProjectCardModel.Alert] = card.flags?
@@ -402,25 +422,29 @@ extension PPOProjectCardModel {
     // This specifically links to the survey tab.
     let backingDetailsUrl = backing?.backingDetailsPageRoute
     let backingId = backing.flatMap { decompose(id: $0.id) }
+    let backingGraphId = backing?.id
 
-    switch (card.tierType, backing?.clientSecret) {
-    case (PPOProjectCardModelConstants.paymentFailed, _):
+    switch (card.tierType, backing?.clientSecret, addressWithoutName, addressId) {
+    case (PPOProjectCardModelConstants.paymentFailed, _, _, _):
       primaryAction = .fixPayment
       secondaryAction = nil
       tierType = .fixPayment
-    case (PPOProjectCardModelConstants.confirmAddress, _):
-      primaryAction = .confirmAddress
+    case let (PPOProjectCardModelConstants.confirmAddress, _, .some(address), .some(addressId)):
+      primaryAction = .confirmAddress(address: address, addressId: addressId)
       secondaryAction = .editAddress
       tierType = .confirmAddress
-    case (PPOProjectCardModelConstants.completeSurvey, _):
+    case (PPOProjectCardModelConstants.confirmAddress, _, _, _):
+      // Return nil instead of a card if there's no address to confirm.
+      return nil
+    case (PPOProjectCardModelConstants.completeSurvey, _, _, _):
       primaryAction = .completeSurvey
       secondaryAction = nil
       tierType = .openSurvey
-    case let (PPOProjectCardModelConstants.authenticationRequired, .some(clientSecret)):
+    case let (PPOProjectCardModelConstants.authenticationRequired, .some(clientSecret), _, _):
       primaryAction = .authenticateCard(clientSecret: clientSecret)
       secondaryAction = nil
       tierType = .authenticateCard
-    case (PPOProjectCardModelConstants.authenticationRequired, .none),
+    case (PPOProjectCardModelConstants.authenticationRequired, .none, _, _),
          _:
       return nil
     }
@@ -428,7 +452,7 @@ extension PPOProjectCardModel {
     let projectAnalyticsFragment = backing?.project?.fragments.projectAnalyticsFragment
 
     if let image, let projectName, let projectId, let formattedPledge, let creatorName,
-       let projectAnalyticsFragment, let backingDetailsUrl, let backingId {
+       let projectAnalyticsFragment, let backingDetailsUrl, let backingId, let backingGraphId {
       self.init(
         isUnread: true,
         alerts: alerts,
@@ -437,11 +461,12 @@ extension PPOProjectCardModel {
         projectId: projectId,
         pledge: formattedPledge,
         creatorName: creatorName,
-        address: address,
+        address: addressWithName,
         actions: (primaryAction, secondaryAction),
         tierType: tierType,
         backingDetailsUrl: backingDetailsUrl,
         backingId: backingId,
+        backingGraphId: backingGraphId,
         projectAnalytics: projectAnalyticsFragment
       )
     } else {
